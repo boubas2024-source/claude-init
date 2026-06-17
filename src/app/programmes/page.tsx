@@ -6,7 +6,8 @@ import { Footer } from '@/components/layout/Footer'
 import { ProductCard } from '@/components/catalogue/ProductCard'
 import { FilterBar } from '@/components/catalogue/FilterBar'
 import { SectionLoader } from '@/components/ui/Loader'
-import { Building2 } from 'lucide-react'
+import { Building2, WifiOff } from 'lucide-react'
+import { catalogueCache } from '@/lib/catalogueCache'
 
 interface Programme {
   id: string
@@ -32,18 +33,31 @@ interface Produit {
 }
 
 export default function ProgrammesPage() {
-  const [produits, setProduits] = useState<Produit[]>([])
+  const [produits, setProduits]     = useState<Produit[]>([])
   const [programmes, setProgrammes] = useState<Programme[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading]   = useState(true)
+  const [isOffline, setIsOffline]   = useState(false)
 
   // Filters
-  const [search, setSearch] = useState('')
+  const [search, setSearch]       = useState('')
   const [categorie, setCategorie] = useState('')
   const [programme, setProgramme] = useState('')
-  const [statut, setStatut] = useState('')
+  const [statut, setStatut]       = useState('')
 
   useEffect(() => {
     const fetchData = async () => {
+      // 1. Afficher immédiatement depuis le cache IndexedDB si disponible
+      const [cachedProduits, cachedProgrammes] = await Promise.all([
+        catalogueCache.getProduits<Produit>(),
+        catalogueCache.getProgrammes<Programme>(),
+      ])
+      if (cachedProduits && cachedProgrammes) {
+        setProduits(cachedProduits)
+        setProgrammes(cachedProgrammes)
+        setIsLoading(false)
+      }
+
+      // 2. Tenter la mise à jour réseau
       try {
         const [produitsRes, programmesRes] = await Promise.all([
           fetch('/api/produits'),
@@ -53,10 +67,23 @@ export default function ProgrammesPage() {
           produitsRes.json(),
           programmesRes.json(),
         ])
-        setProduits(produitsData.produits || [])
-        setProgrammes(programmesData.programmes || [])
-      } catch (error) {
-        console.error('Error fetching data:', error)
+        const freshProduits   = produitsData.produits   || []
+        const freshProgrammes = programmesData.programmes || []
+
+        setProduits(freshProduits)
+        setProgrammes(freshProgrammes)
+        setIsOffline(false)
+
+        // Mettre à jour le cache en arrière-plan
+        await Promise.all([
+          catalogueCache.cacheProduits(freshProduits),
+          catalogueCache.cacheProgrammes(freshProgrammes),
+        ])
+      } catch {
+        // Réseau indisponible — on reste sur le cache
+        if (!cachedProduits) {
+          setIsOffline(true)
+        }
       } finally {
         setIsLoading(false)
       }
@@ -85,6 +112,14 @@ export default function ProgrammesPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
+
+      {/* Bannière mode hors-ligne */}
+      {isOffline && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-2 text-amber-800 text-sm">
+          <WifiOff className="w-4 h-4 flex-shrink-0" />
+          <span>Mode hors-ligne — données du dernier cache affiché. Reconnectez-vous pour voir les disponibilités en temps réel.</span>
+        </div>
+      )}
 
       {/* Header */}
       <div className="bg-navy py-12">

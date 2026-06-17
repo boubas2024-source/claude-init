@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Navbar } from '@/components/layout/Navbar'
 import { Footer } from '@/components/layout/Footer'
@@ -20,6 +20,8 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
+import { souscriptionDraft } from '@/lib/souscriptionDraft'
+import { catalogueCache } from '@/lib/catalogueCache'
 
 const STEPS = [
   { number: 1, label: 'Bien choisi' },
@@ -65,14 +67,24 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [acceptsCGV, setAcceptsCGV] = useState(false)
+  const [resumedFromDraft, setResumedFromDraft] = useState(false)
   const [souscriptionResult, setSouscriptionResult] = useState<{
     numRecu: string
     dateExpiration: string
     id: string
   } | null>(null)
 
+  // Sauvegarder le brouillon à chaque changement d'étape
+  const saveDraft = useCallback((step: number, cgv: boolean) => {
+    souscriptionDraft.save(params.produitId, { step, acceptsCGV: cgv })
+  }, [params.produitId])
+
   useEffect(() => {
     const fetchData = async () => {
+      // 1. Essayer le cache IndexedDB d'abord pour affichage immédiat
+      const cached = await catalogueCache.getProduit<Produit>(params.produitId)
+      if (cached) setProduit(cached)
+
       try {
         const [produitRes, clientRes] = await Promise.all([
           fetch(`/api/produits/${params.produitId}`),
@@ -85,7 +97,7 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
         }
 
         const produitData = await produitRes.json()
-        const clientData = await clientRes.json()
+        const clientData  = await clientRes.json()
 
         if (!produitRes.ok) {
           toast.error('Produit introuvable')
@@ -95,9 +107,18 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
 
         setProduit(produitData.produit)
         setClient(clientData.client)
+
+        // 2. Reprendre le brouillon si disponible
+        const draft = souscriptionDraft.load(params.produitId)
+        if (draft && draft.step > 1 && draft.step < 5) {
+          setCurrentStep(draft.step)
+          setAcceptsCGV(draft.acceptsCGV)
+          setResumedFromDraft(true)
+          setTimeout(() => setResumedFromDraft(false), 4000)
+        }
       } catch (error) {
         console.error(error)
-        toast.error('Erreur lors du chargement')
+        if (!cached) toast.error('Erreur lors du chargement')
       } finally {
         setIsLoading(false)
       }
@@ -120,6 +141,7 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Erreur lors de la souscription')
       setSouscriptionResult(data)
+      souscriptionDraft.clear(params.produitId)
       setCurrentStep(5)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erreur inconnue')
@@ -156,6 +178,14 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar isAuthenticated={!!client} />
+
+      {/* Bannière reprise brouillon */}
+      {resumedFromDraft && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 flex items-center gap-2 text-blue-800 text-sm">
+          <CheckCircle className="w-4 h-4 flex-shrink-0" />
+          <span>Votre progression a été restaurée — vous reprenez là où vous vous étiez arrêté.</span>
+        </div>
+      )}
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
@@ -237,7 +267,7 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
               <Button
                 variant="primary"
                 size="lg"
-                onClick={() => setCurrentStep(2)}
+                onClick={() => { setCurrentStep(2); saveDraft(2, acceptsCGV) }}
                 disabled={!isAvailable}
               >
                 Continuer
@@ -290,8 +320,8 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
             </div>
 
             <div className="flex justify-between mt-6">
-              <Button variant="ghost" onClick={() => setCurrentStep(1)}>Retour</Button>
-              <Button variant="primary" onClick={() => setCurrentStep(3)}>Continuer</Button>
+              <Button variant="ghost" onClick={() => { setCurrentStep(1); saveDraft(1, acceptsCGV) }}>Retour</Button>
+              <Button variant="primary" onClick={() => { setCurrentStep(3); saveDraft(3, acceptsCGV) }}>Continuer</Button>
             </div>
           </div>
         )}
@@ -368,10 +398,10 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
             </div>
 
             <div className="flex justify-between mt-6">
-              <Button variant="ghost" onClick={() => setCurrentStep(2)}>Retour</Button>
+              <Button variant="ghost" onClick={() => { setCurrentStep(2); saveDraft(2, acceptsCGV) }}>Retour</Button>
               <Button
                 variant="primary"
-                onClick={() => setCurrentStep(4)}
+                onClick={() => { setCurrentStep(4); saveDraft(4, acceptsCGV) }}
                 disabled={!acceptsCGV}
               >
                 Soumettre mon dossier
@@ -405,7 +435,7 @@ export default function SouscrirePage({ params }: { params: { produitId: string 
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button variant="ghost" onClick={() => setCurrentStep(3)} disabled={isSubmitting}>
+              <Button variant="ghost" onClick={() => { setCurrentStep(3); saveDraft(3, acceptsCGV) }} disabled={isSubmitting}>
                 Retour
               </Button>
               <Button

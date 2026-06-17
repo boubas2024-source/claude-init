@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Toaster } from 'react-hot-toast'
+import { ServiceWorkerRegistration } from '@/components/ServiceWorkerRegistration'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -13,6 +14,13 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'fr_BF',
   },
+  manifest: '/manifest.json',
+  themeColor: '#1A3A5C',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'IMAZ',
+  },
 }
 
 export default function RootLayout({
@@ -22,7 +30,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#1A3A5C" />
+        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+      </head>
       <body>
+        <ServiceWorkerRegistration />
         {children}
         <Toaster
           position="top-right"
