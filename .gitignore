@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnp
+
+# Next.js
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+dist/
+build/
+
+# Prisma
+prisma/dev.db
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Uploads
+public/uploads/*
+!public/uploads/.gitkeep
+
+# TypeScript
+*.tsbuildinfo
+
+# Next.js generated
+next-env.d.ts

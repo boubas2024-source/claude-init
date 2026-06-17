@@ -1,0 +1,126 @@
+name: CD — Déploiement production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environnement cible"
+        required: true
+        default: production
+        type: choice
+        options: [production, staging]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/imaz-platform
+
+jobs:
+  build-and-push:
+    name: Build & Push image Docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connexion au registre Docker
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Métadonnées de l'image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & Push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Déployer sur le serveur
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Déployer via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
+          port:     ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd /opt/imaz
+
+            # Récupérer la nouvelle image
+            echo "${{ secrets.GITHUB_TOKEN }}" | \
+              docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+            # Mettre à jour le tag dans docker-compose
+            export IMAGE_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+            # Migrations en zero-downtime (sur le conteneur existant)
+            docker compose run --rm app npx prisma migrate deploy
+
+            # Redémarrage rolling
+            docker compose up -d --no-deps --build app
+            docker compose up -d nginx
+
+            # Healthcheck post-déploiement
+            sleep 10
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/api/health)
+            if [ "$STATUS" != "200" ]; then
+              echo "HEALTHCHECK FAILED (HTTP $STATUS) — rollback"
+              docker compose pull app  # re-pull last known good si tag flottant
+              docker compose up -d --no-deps app
+              exit 1
+            fi
+
+            echo "✅ Déploiement réussi — HTTP $STATUS"
+
+            # Nettoyage des images orphelines
+            docker image prune -f
+
+  notify:
+    name: Notification de déploiement
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy]
+    if: always()
+
+    steps:
+      - name: Statut déploiement
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Déploiement IMAZ réussi — $(date '+%d/%m/%Y %H:%M')"
+          else
+            echo "❌ Déploiement IMAZ ÉCHOUÉ — voir les logs"
+            exit 1
+          fi
